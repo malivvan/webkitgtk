@@ -1,6 +1,6 @@
 module github.com/malivvan/webkitgtk
 
-go 1.21.1
+go 1.21.5
 
 require github.com/ebitengine/purego v0.6.0-alpha.2
 

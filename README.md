@@ -7,7 +7,7 @@ Pure Go WebKitGTK binding for **Linux** and **FreeBSD**.
 ## Installation
 
 ```sh
-# go 1.21+
+# go 1.21.5+
 go get github.com/malivvan/webkitgtk
 ```
 
