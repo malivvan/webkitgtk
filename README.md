@@ -1,7 +1,7 @@
 # webkitgtk [![Go Reference](https://pkg.go.dev/badge/github.com/malivvan/webkitgtk.svg)](https://pkg.go.dev/github.com/malivvan/webkitgtk) [![Release](https://img.shields.io/github/v/release/malivvan/webkitgtk.svg?sort=semver)](https://github.com/malivvan/webkitgtk/releases/latest) [![Go Report Card](https://goreportcard.com/badge/github.com/malivvan/webkitgtk)](https://goreportcard.com/report/github.com/malivvan/webkitgtk) [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 Pure Go WebKitGTK binding for **Linux** and **FreeBSD**.
 
-> This is beta software so expect bugs and potentially API breaking changes
+> This is pre release software so expect bugs and potentially API breaking changes
 > but each release will be tagged to avoid breaking people's code.
 
 ## Installation
