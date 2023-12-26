@@ -51,10 +51,9 @@ class WebkitAPI {
 		});
 	}
 }
-let api = new WebkitAPI();
+window.webkitAPI = new WebkitAPI();
 {{range $api, $calls := .Calls}}window.{{$api}} = {};
-{{range $calls}}window.{{$api}}.{{.}} = (obj) => api.request("{{$api}}", "{{.}}", obj);{{end}}{{end}}
-window.webkit.api = api;
+{{range $calls}}window.{{$api}}.{{.}} = (obj) => window.webkitAPI.request("{{$api}}", "{{.}}", obj);{{end}}{{end}}
 })(document.cloneNode(),globalThis.window);`))
 
 func apiHandler(bindings map[string]apiBinding, eval func(string), log func(interface{}, ...interface{})) func(string) {
@@ -88,17 +87,17 @@ func apiHandler(bindings map[string]apiBinding, eval func(string), log func(inte
 		log("api request", "id", id, "api", api, "fn", fn)
 		binding, ok := bindings[api]
 		if !ok {
-			eval("webkit.api.reject(" + string(id) + ",'api not found')")
+			eval("webkitAPI.reject(" + string(id) + ",'api not found')")
 			return
 		}
 		reply, err := binding.call(fn, req[cur:])
 		if err != nil {
 			log("api reject", "id", id, "error", err)
-			eval("webkit.api.reject(" + string(id) + ",'" + err.Error() + "')")
+			eval("webkitAPI.reject(" + string(id) + ",'" + err.Error() + "')")
 			return
 		}
 		log("api resolve", "id", id, "reply", reply)
-		eval("webkit.api.resolve(" + id + ",'" + reply + "')")
+		eval("webkitAPI.resolve(" + id + ",'" + reply + "')")
 	}
 }
 

@@ -1,6 +1,7 @@
 package webkitgtk
 
 import (
+	"errors"
 	"fmt"
 	"github.com/ebitengine/purego"
 	"os"
@@ -44,6 +45,21 @@ type (
 	}
 )
 
+type gError struct {
+	domain  uint32
+	code    int
+	message string
+}
+
+func (gErr *gError) toError(msg string) error {
+	if gErr == nil && gErr.message == "" {
+		return nil
+	}
+	msg += ": " + gErr.message
+	lib.g.ErrorFree(gErr)
+	return errors.New(msg)
+}
+
 const (
 	gSourceRemove int = 0
 
@@ -70,24 +86,40 @@ var lib struct {
 	Webkit uintptr
 
 	g struct {
-		ApplicationHold      func(ptr)
-		ApplicationQuit      func(ptr)
-		ApplicationRegister  func(ptr, ptr, ptr)
-		ApplicationActivate  func(ptr)
-		GetApplicationName   func() string
-		ApplicationRelease   func(ptr)
-		ApplicationRun       func(ptr, int, []string) int
-		BytesNewStatic       func(uintptr, int) uintptr
-		BytesUnref           func(uintptr)
-		Free                 func(ptr)
-		IdleAdd              func(uintptr)
-		ObjectRefSink        func(ptr)
-		ObjectUnref          func(ptr)
-		SignalConnectData    func(ptr, string, uintptr, ptr, bool, int) int
-		SignalConnectObject  func(ptr, string, ptr, ptr, int) uint
-		SignalHandlerBlock   func(ptr, uint)
-		SignalHandlerUnblock func(ptr, uint)
-		ThreadSelf           func() uint64
+		ApplicationHold        func(ptr)
+		ApplicationQuit        func(ptr)
+		ApplicationRegister    func(ptr, ptr, ptr)
+		ApplicationActivate    func(ptr)
+		GetApplicationName     func() string
+		ApplicationRelease     func(ptr)
+		ApplicationRun         func(ptr, int, []string) int
+		BytesNewStatic         func(uintptr, int) uintptr
+		BytesUnref             func(uintptr)
+		Free                   func(ptr)
+		IdleAdd                func(uintptr)
+		ObjectRef              func(ptr)
+		ObjectRefSink          func(ptr)
+		ObjectUnref            func(ptr)
+		ObjectSet              func(ptr, string, ptr)
+		ObjectGet              func(ptr, string, ptr)
+		SignalConnectData      func(ptr, string, uintptr, ptr, bool, int) int
+		SignalConnectObject    func(ptr, string, ptr, ptr, int) uint
+		SignalHandlerBlock     func(ptr, uint)
+		SignalHandlerUnblock   func(ptr, uint)
+		ThreadSelf             func() uint64
+		InputStreamClose       func(ptr, ptr, *gError) bool
+		InputStreamReadAll     func(ptr, ptr, int, *int, ptr, *gError) bool
+		ErrorFree              func(*gError)
+		UnixInputStreamNew     func(int, bool) ptr
+		ErrorNewLiteral        func(uint32, string, int, string) *gError
+		QuarkFromString        func(string) ptr
+		BuildFilename          func(...string) ptr
+		GetHomeDir             func() string
+		RefStringNew           func(string) ptr
+		RefStringRelease       func(ptr)
+		CancellableNew         func() ptr
+		CancellableCancel      func(ptr)
+		CancellableIsCancelled func(ptr) bool
 	}
 	gdk struct {
 		DisplayGetMonitor         func(ptr, int) ptr
@@ -179,6 +211,10 @@ var lib struct {
 		WindowSetTitle         func(windowPtr, string)
 		WindowUnfullscreen     func(windowPtr)
 		WindowUnmaximize       func(windowPtr)
+	}
+	soup struct {
+		MessageHeadersNew    func(int) ptr
+		MessageHeadersAppend func(ptr, string, string)
 	}
 	webkitSettings struct {
 		GetEnableJavascript                          func(webkitSettingsPtr) bool
@@ -306,12 +342,35 @@ var lib struct {
 		SetDisableWebSecurity                        func(webkitSettingsPtr, bool)
 	}
 	jsc struct {
+		ValueNewString       func(string) ptr
 		ValueToString        func(ptr) string
 		ValueToStringAsBytes func(ptr) string
 		ValueIsString        func(ptr) bool
+
+		ValueToDouble func(ptr) float64
+		ValueIsNumber func(ptr) bool
+
+		ValueToBoolean func(ptr) bool
+		ValueIsBoolean func(ptr) bool
+
+		ValueIsObject            func(ptr) bool
+		ValueObjectInvokeMethodv func(ptr, string, int, ...ptr) ptr
+		ValueObjectGetProperty   func(ptr, string) ptr
+		ValueObjectSetProperty   func(ptr, string, ptr)
+
+		ValueIsArray func(ptr) bool
+
+		ContextGetCurrent      func() ptr
+		ValueIsUndefined       func(ptr) bool
+		ValueIsNull            func(ptr) bool
+		ContextGetValue        func(ptr, string) ptr
+		ContextGetException    func(ptr) ptr
+		ContextGetGlobalObject func(ptr) ptr
+		ExceptionGetMessage    func(ptr) string
+		ValueGetContext        func(ptr) ptr
 	}
 	webkit struct {
-		//WebViewNew                       func() ptr
+		WebViewNewWithContext            func(ptr) webviewPtr
 		WebViewNewWithUserContentManager func(userContentManagerPtr) webviewPtr
 		WebContextRegisterUriScheme      func(ptr, string, ptr, int, int)
 		//webkitSettingsGetEnableDeveloperExtras                  func(pointer) bool
@@ -321,23 +380,26 @@ var lib struct {
 		UserContentManagerNew                          func() userContentManagerPtr
 		UserContentManagerRegisterScriptMessageHandler func(userContentManagerPtr, string)
 
-		//	WebsiteDataManagerNew               func(...string) ptr
-		//WebContextNewWithWebsiteDataManager func(ptr) ptr
-		//web_context_get_cookie_manager
-		// void webkit_cookie_manager_set_storage
+		WebContextGetWebsiteDataManager   func(ptr) ptr
 		CookieManagerSetPersistentStorage func(ptr, string, int)
 		WebContextGetCookieManager        func(ptr) ptr
 		WebViewGetUserContentManager      func(webviewPtr) userContentManagerPtr
 
-		WebsiteDataManagerNew               func(...string) ptr
-		WebContextNewWithWebsiteDataManager func(ptr) ptr
-		WebContextGetSandboxEnabled         func(ptr) bool
-		WebContextSetSandboxEnabled         func(ptr, bool)
-		WebContextAddPathToSandbox          func(ptr, string)
-		WebContextGetSpellCheckingEnabled   func(ptr) bool
-		WebContextSetSpellCheckingEnabled   func(ptr, bool)
+		WebsiteDataManagerNew                                   func(string, string, string, string, string, bool, ptr) ptr
+		WebContextSetFaviconDatabaseDirectory                   func(ptr, string)
+		WebContextSetWebExtensionsDirectory                     func(ptr, string)
+		WebsiteDataManagerGetBaseCacheDirectory                 func(ptr) string
+		WebsiteDataManagerGetLocalStorageDirectory              func(ptr) string
+		WebsiteDataManagerSetPersistentCredentialStorageEnabled func(ptr, bool)
+		WebContextNewWithWebsiteDataManager                     func(ptr) ptr
+		WebContextGetSandboxEnabled                             func(ptr) bool
+		WebContextSetSandboxEnabled                             func(ptr, bool)
+		WebContextAddPathToSandbox                              func(ptr, string)
+		WebContextGetSpellCheckingEnabled                       func(ptr) bool
+		WebContextSetSpellCheckingEnabled                       func(ptr, bool)
 
 		JavascriptResultGetJsValue func(ptr) ptr
+		JavascriptResultUnref      func(ptr)
 		WebContextGetDefault       func() ptr
 
 		WebContextGetSecurityManager                      func(ptr) ptr
@@ -347,15 +409,32 @@ var lib struct {
 		SecurityManagerRegisterUriSchemeAsCorsEnabled     func(ptr, string)
 		SecurityManagerRegisterUriSchemeAsLocal           func(ptr, string)
 
-		WebViewEvaluateJavascript func(webviewPtr, string, int, ptr, string, ptr, ptr, ptr)
-		WebViewGetSettings        func(webviewPtr) webkitSettingsPtr
-		WebViewGetZoomLevel       func(webviewPtr) float64
-		WebViewLoadAlternateHtml  func(webviewPtr, string, string, *string)
-		WebViewLoadUri            func(webviewPtr, string)
-		WebViewSetBackgroundColor func(webviewPtr, ptr)
-		WebViewSetSettings        func(webviewPtr, webkitSettingsPtr)
-		WebViewSetZoomLevel       func(webviewPtr, float64)
-		WebViewLoadBytes          func(webviewPtr, []byte, string, string, string)
+		WebViewEvaluateJavascript                func(webviewPtr, string, int, ptr, ptr, ptr, ptr, ptr)
+		WebViewEvaluateJavascriptFinish          func(webviewPtr, ptr, *gError) ptr
+		WebViewCallAsyncJavascriptFunction       func(webviewPtr, string, int, ptr, ptr, ptr, ptr, ptr, ptr)
+		WebViewCallAsyncJavascriptFunctionFinish func(webviewPtr, ptr, *gError) ptr
+		WebViewGetSettings                       func(webviewPtr) webkitSettingsPtr
+		WebViewGetZoomLevel                      func(webviewPtr) float64
+		//WebViewLoadAlternateHtml  func(webviewPtr, string, string, *string)
+		WebViewLoadUri                     func(webviewPtr, string)
+		WebViewLoadHtml                    func(webviewPtr, string, string)
+		WebViewSetBackgroundColor          func(webviewPtr, ptr)
+		WebViewSetSettings                 func(webviewPtr, webkitSettingsPtr)
+		WebViewSetZoomLevel                func(webviewPtr, float64)
+		WebViewLoadBytes                   func(webviewPtr, []byte, string, string, string)
+		WebViewSetCorsAllowlist            func(webviewPtr, ...ptr)
+		UriSchemeRequestGetUri             func(ptr) string
+		UriSchemeRequestGetHttpMethod      func(ptr) string
+		UriSchemeRequestGetHttpHeaders     func(ptr) ptr
+		UriSchemeRequestGetHttpBody        func(ptr) ptr
+		UriSchemeRequestFinish             func(ptr, ptr, int, string)
+		UriSchemeRequestFinishError        func(ptr, *gError)
+		UriSchemeRequestFinishWithResponse func(ptr, ptr)
+
+		UriSchemeResponseNew            func(ptr, int64) ptr
+		UriSchemeResponseSetStatus      func(ptr, int, string)
+		UriSchemeResponseSetContentType func(ptr, string)
+		UriSchemeResponseSetHttpHeaders func(ptr, ptr)
 	}
 }
 
@@ -496,6 +575,10 @@ func (a *App) loadSharedLibs() error {
 	err = registerFunctions(lib.GTK, "gtk", &lib.gtk)
 	if err != nil {
 		return fmt.Errorf("unable to register gtk functions: %w", err)
+	}
+	err = registerFunctions(lib.Webkit, "soup", &lib.soup)
+	if err != nil {
+		return fmt.Errorf("unable to register soup functions: %w", err)
 	}
 	err = registerFunctions(lib.Webkit, "jsc", &lib.jsc)
 	if err != nil {

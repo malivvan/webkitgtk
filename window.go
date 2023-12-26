@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/ebitengine/purego"
+	"net/http"
 	"net/url"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -14,20 +16,8 @@ import (
 	"unsafe"
 )
 
-var URLScheme = "app"
-var UserAgent = "webkit2gtk"
-
 var windowID uint
 var windowIDLock sync.RWMutex
-
-//var showDevTools = func(pointer unsafe.Pointer) {}
-
-type dragInfo struct {
-	XRoot       int
-	YRoot       int
-	DragTime    int
-	MouseButton uint
-}
 
 func getWindowID() uint {
 	windowIDLock.Lock()
@@ -103,12 +93,6 @@ type WindowOptions struct {
 
 	// Color specified the window color as a hex string (#RGB, #RGBA, #RRGGBB, #RRGGBBAA)
 	Color string
-	// BackgroundType is the type of background to use for the window.
-	// Default: BackgroundTypeSolid
-	//BackgroundType BackgroundType
-
-	// BackgroundColour is the colour to use for the window background.
-	//BackgroundColour RGBA
 
 	// X is the starting X position of the window.
 	X int
@@ -156,14 +140,6 @@ type Window struct {
 
 	bindings  map[string]apiBinding
 	constants map[string]string
-}
-
-type assetHandler struct {
-	registered bool
-}
-
-func (ah *assetHandler) handleURISchemeRequest(request uintptr) {
-	println("handleURISchemeRequest", request)
 }
 
 // Open opens a new window with the given options.
@@ -219,7 +195,6 @@ func (a *App) Open(options WindowOptions) *Window {
 	}
 
 	a.runOnce.add(newWindow)
-	//	a.runOrDeferToAppRun(newWindow)
 	return newWindow
 }
 
@@ -231,9 +206,6 @@ func (w *Window) run() {
 	invokeSync(w.create)
 }
 
-// //////////////////////////////////////////////
-var registered = false
-
 func (w *Window) create() {
 	id := w.ID()
 
@@ -242,63 +214,212 @@ func (w *Window) create() {
 	w.app.windowsLock.Unlock()
 
 	openTime := time.Now()
-	w.log("creating pointer", "id", w.id, "name", w.options.Name)
+	w.log("creating window", "id", w.id, "name", w.options.Name)
 
 	w.pointer = lib.gtk.ApplicationWindowNew(w.app.pointer)
 	lib.g.ObjectRefSink(ptr(w.pointer))
+	/////////////////////////////////////////////////////////////////////
 
-	manager := lib.webkit.UserContentManagerNew()
+	// 1. Create the web context once.
+	if w.app.context == 0 {
 
+		// 1.1. Prepare the data manager for the web context.
+		cacheDir := w.app.options.CacheDir
+		if cacheDir == "" {
+			cacheDir = filepath.Join(lib.g.GetHomeDir(), ".cache", "webkitgtk", w.app.options.Name)
+		}
+		dataDir := w.app.options.DataDir
+		if dataDir == "" {
+			dataDir = filepath.Join(lib.g.GetHomeDir(), ".local", "share", "webkitgtk", w.app.options.Name)
+		}
+		if w.app.options.Ephemeral {
+			cacheDir = ""
+			dataDir = ""
+		}
+		dataManager := lib.webkit.WebsiteDataManagerNew(
+			"base-cache-directory", cacheDir,
+			"base-data-directory", dataDir,
+			"is-ephemeral", w.app.options.Ephemeral, 0)
+		w.app.context = lib.webkit.WebContextNewWithWebsiteDataManager(dataManager)
+
+		// 1.2. Configure additional data manager settings if not ephemeral.
+		if !w.app.options.Ephemeral {
+			lib.webkit.WebsiteDataManagerSetPersistentCredentialStorageEnabled(dataManager, true)
+
+			cookieManager := lib.webkit.WebContextGetCookieManager(w.app.context)
+			lib.webkit.CookieManagerSetPersistentStorage(cookieManager, filepath.Join(dataDir, "cookies.db"), 1)
+
+			lib.webkit.WebContextSetFaviconDatabaseDirectory(w.app.context, filepath.Join(dataDir, "favicons"))
+			lib.webkit.WebContextSetWebExtensionsDirectory(w.app.context, filepath.Join(dataDir, "extensions"))
+		}
+
+		// 1.3. Configure app URI scheme and register it with the web context.
+		securityManager := lib.webkit.WebContextGetSecurityManager(w.app.context)
+		lib.webkit.SecurityManagerRegisterUriSchemeAsCorsEnabled(securityManager, uriScheme)
+		lib.webkit.SecurityManagerRegisterUriSchemeAsSecure(securityManager, uriScheme)
+		lib.webkit.WebContextRegisterUriScheme(
+			w.app.context,
+			uriScheme,
+			ptr(purego.NewCallback(func(request ptr) {
+				r := newUriSchemeRequest(request)
+				defer r.Close()
+
+				req, err := r.toHttpRequest()
+				if err != nil {
+					w.log("error parsing request", "error", err)
+					return
+				}
+
+				rw := r.toResponseWriter()
+				defer rw.Close()
+
+				if handler, exists := w.app.options.Handle[req.URL.Host]; exists {
+					handler.ServeHTTP(rw, req)
+					return
+				}
+
+				w.log("no handler found for request", "host", req.URL.Host)
+				http.Error(rw, "no handler found for request", http.StatusNotFound)
+			})),
+			0,
+			0,
+		)
+	}
+
+	// 2. Create the webview add app URI scheme to the CORS allow list.
+	w.webview = lib.webkit.WebViewNewWithContext(w.app.context)
+	uriSchemeEntry := lib.g.RefStringNew(uriScheme + "://*/*")
+	defer lib.g.RefStringRelease(uriSchemeEntry)
+	lib.webkit.WebViewSetCorsAllowlist(w.webview, uriSchemeEntry, 0)
+
+	// 3. Register the API handler if bindings are defined.
+	userContentManager := lib.webkit.WebViewGetUserContentManager(w.webview)
 	if w.bindings != nil {
-		manager.registerScriptMessageHandler("api", apiHandler(w.bindings, w.ExecJS, w.log))
+		userContentManager.registerScriptMessageHandler("api", apiHandler(w.bindings, w.ExecJS, w.log))
 	}
 
-	w.webview = lib.webkit.WebViewNewWithUserContentManager(manager)
-
-	if !registered {
-		webContext := lib.webkit.WebContextGetDefault()
-		//dataManager := lib.webkit.WebsiteDataManagerNew()
-		cookieManager := lib.webkit.WebContextGetCookieManager(webContext)
-		lib.webkit.CookieManagerSetPersistentStorage(cookieManager, "/home/malivvan/webkitdata/xxx", 0)
-
-		//dataManager := lib.webkit.WebsiteDataManagerNew("base-data-directory","~/xxxxxx/")
-		//	webContext  := lib.webkit.WebContextNewWithWebsiteDataManager(dataManager)
-		//	//	println("sandboxing webview", lib.webkit.WebContextGetSandboxEnabled(webContext))
-		//	securityManager := lib.webkit.WebContextGetSecurityManager(webContext)
-		//	lib.webkit.SecurityManagerRegisterUriSchemeAsLocal(securityManager, URLScheme)
-		//	lib.webkit.SecurityManagerRegisterUriSchemeAsSecure(securityManager, URLScheme)
-		//	//webkitSecurityManagerRegisterUriSchemeAsCorsEnabled(securityManager, URLScheme)
-		//	//	webkitSecurityManagerRegisterUriSchemeAsNoAccess(securityManager, URLScheme)
-		//
-		//	lib.webkit.WebContextRegisterUriScheme(
-		//		webContext,
-		//		URLScheme,
-		//		ptr(purego.NewCallback(func(request uintptr) {
-		//			//	globalApplication.server.handleURISchemeRequest(request)
-		//
-		//		})),
-		//		0,
-		//		0,
-		//	)
-		registered = true
-	}
-
+	// 4. Apply the webkit settings to the webview.
 	settings := lib.webkit.WebViewGetSettings(w.webview)
 	defaultWebkitSettings.apply(settings)
-	lib.webkitSettings.SetUserAgentWithApplicationDetails(
-		settings,
-		UserAgent,
-		"")
-	lib.webkitSettings.SetHardwareAccelerationPolicy(settings, 1)
-	lib.webkit.WebViewSetSettings(w.webview, settings)
 
+	////////////////////////////////////////////////////////////////////////////////
+	//	var webkitDefault = WebkitSettings{
+	//****		EnableJavascript:                          true,
+	//****		EnableWebAudio:                            true,
+	//****		EnableWebgl:                               true,
+	//****		EnableOfflineWebApplicationCache:          true,
+	//****		EnableHtml5LocalStorage:                   true,
+	//****		EnableHtml5Database:                       true,
+	//****		EnableMediaStream:                         true,
+	//****		EnableMediaSource:                         true,
+	//****		EnableJavascriptMarkup:                    true,
+	//****		EnableMedia:                               true,
+	//****		EnableWebRTC:                              false,
+
+	//depr		LoadIconsIgnoringImageLoadSetting:         false,
+	//depr		EnableXssAuditor:                          false,
+	//depr		EnableFrameFlattening:                     false,
+	//depr		EnablePlugins:                             false,
+	//depr		EnableJava:                                false,
+	//depr		EnablePrivateBrowsing:                     false,
+	//depr		EnableAccelerated2DCanvas:                 false,
+
+	//font		DefaultFontFamily:                         "sans-serif",
+	//font		MonospaceFontFamily:                       "monospace",
+	//font		SerifFontFamily:                           "serif",
+	//font		SansSerifFontFamily:                       "sans-serif",
+	//font		CursiveFontFamily:                         "serif",
+	//font		FantasyFontFamily:                         "serif",
+	//font		PictographFontFamily:                      "serif",
+	//font		DefaultFontSize:                           16,
+	//font		DefaultMonospaceFontSize:                  13,
+	//font		MinimumFontSize:                           0,
+
+	//conf		HardwareAccelerationPolicy:                1,
+	//conf		EnableDeveloperExtras:                     false,
+	//conf		EnableTabsToLinks:                         true,
+	//conf		JavascriptCanOpenWindowsAutomatically:     false,
+	//conf		EnableHyperlinkAuditing:                   true,
+	//conf		EnableDnsPrefetching:                      false,
+	//conf		ZoomTextOnly:                              false,
+	//conf		JavascriptCanAccessClipboard:              false,
+	//conf		MediaPlaybackRequiresUserGesture:          false,
+	//conf		EnablePageCache:                           true,
+	//conf		UserAgent:                                 "Mozilla/5.0 (X11; Ubuntu; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.4 Safari/605.1.15",
+
+	//****		DefaultCharset:                            "iso-8859-1",
+	//****		AutoLoadImages:                            true,
+	//****		EnableResizableTextAreas:                  true,
+	//****		EnableFullscreen:                          true,
+	//****		PrintBackgrounds:                          true,
+	//****		EnableSmoothScrolling:                     true,
+	//****		MediaPlaybackAllowsInline:                 true,
+	//****		EnableSiteSpecificQuirks:                  true,
+
+	//----		DrawCompositingIndicators:                 false,
+	//----		EnableWriteConsoleMessagesToStdout:        false,
+	//----		EnableEncryptedMedia:                      false,
+	//----		DisableWebSecurity:                        false,
+	//----		EnableCaretBrowsing:                       false,
+	//----		AllowModalDialogs:                         false,
+
+	//		EnableMockCaptureDevices:                  false,
+	//		EnableSpatialNavigation:                   false,
+	//		EnableMediaCapabilities:                   false,
+	//		AllowFileAccessFromFileUrls:               false,
+	//		AllowUniversalAccessFromFileUrls:          false,
+	//		AllowTopNavigationToDataUrls:              false,
+
+	//		EnableBackForwardNavigationGestures:       false,
+
+	//		MediaContentTypesRequiringHardwareSupport: "",
+
+	//	}
+
+	// ALWAYS ON
+	lib.webkitSettings.SetDefaultCharset(settings, "utf-8")
+	lib.webkitSettings.SetAutoLoadImages(settings, true)
+	lib.webkitSettings.SetEnableResizableTextAreas(settings, true)
+	lib.webkitSettings.SetEnableFullscreen(settings, true)
+	lib.webkitSettings.SetPrintBackgrounds(settings, true)
+	lib.webkitSettings.SetEnableSmoothScrolling(settings, true)
+	lib.webkitSettings.SetMediaPlaybackAllowsInline(settings, true)
+	lib.webkitSettings.SetEnableSiteSpecificQuirks(settings, true)
+
+	// ALWAYS OFF
+	lib.webkitSettings.SetDrawCompositingIndicators(settings, false)
+	lib.webkitSettings.SetEnableWriteConsoleMessagesToStdout(settings, false)
+	lib.webkitSettings.SetEnableEncryptedMedia(settings, false)
+	lib.webkitSettings.SetDisableWebSecurity(settings, false)
+	lib.webkitSettings.SetEnableCaretBrowsing(settings, false)
+	lib.webkitSettings.SetAllowModalDialogs(settings, false)
+
+	// CONFIGURABLE
+	// TODO: make these configurable
+
+	// JAVASCRIPT
+	_enableJS := true
+	lib.webkitSettings.SetEnableJavascript(settings, _enableJS)
+	lib.webkitSettings.SetEnableJavascriptMarkup(settings, _enableJS)
+	lib.webkitSettings.SetEnableWebaudio(settings, _enableJS)
+	lib.webkitSettings.SetEnableWebgl(settings, _enableJS)
+	lib.webkitSettings.SetEnableOfflineWebApplicationCache(settings, _enableJS)
+	lib.webkitSettings.SetEnableHtml5LocalStorage(settings, _enableJS)
+	lib.webkitSettings.SetEnableHtml5Database(settings, _enableJS)
+	lib.webkitSettings.SetEnableMedia(settings, _enableJS)
+	lib.webkitSettings.SetEnableMediaStream(settings, _enableJS)
+	lib.webkitSettings.SetEnableMediasource(settings, _enableJS)
+	lib.webkitSettings.SetEnableWebrtc(settings, _enableJS)
+
+	lib.webkit.WebViewSetSettings(w.webview, settings)
+	/////////////////////////////////////////////////////////////////////////////////
+
+	// 1. Create the window with the webview inside.
 	w.vbox = lib.gtk.BoxNew(gtkOrientationVertical, 0)
 	lib.gtk.ContainerAdd(w.pointer, w.vbox)
 	lib.gtk.WidgetSetName(w.vbox, "webview-box")
 	lib.gtk.BoxPackStart(w.vbox, ptr(w.webview), 1, 1, 0)
-
 	windowSetupSignalHandlers(w.id, w.pointer, w.webview)
-	w.SetTitle(w.options.Title)
 
 	// only set min/max GetSize if actually set
 	if w.options.MinWidth != 0 &&
@@ -312,6 +433,7 @@ func (w *Window) create() {
 			w.options.MaxHeight,
 		)
 	}
+	w.SetTitle(w.options.Title)
 	w.SetSize(w.options.Width, w.options.Height)
 	w.SetZoom(w.options.Zoom)
 	w.SetOverlay(w.options.Overlay)
@@ -329,6 +451,7 @@ func (w *Window) create() {
 	} else {
 		w.Center()
 	}
+
 	switch w.options.State {
 	case WindowStateMaximised:
 		w.Maximise()
@@ -342,9 +465,9 @@ func (w *Window) create() {
 		w.SetURL(w.options.URL)
 	} else {
 		if w.options.HTML != "" {
-			w.setHTML(w.options.HTML)
+			w.SetHTML(w.options.HTML)
 		} else {
-			w.setHTML("<html><body>error: no url or html specified in window options</body></html>")
+			w.SetHTML("<html><body>error: no url or html specified in window options</body></html>")
 		}
 	}
 
@@ -360,11 +483,8 @@ func (w *Window) create() {
 		w.ToggleDevTools()
 	}
 
-	//w.ExecJS(ipcJS)
-	w.log("pointer created", "id", w.id, "name", w.options.Name, "since_open", time.Since(openTime))
+	w.log("window created", "id", w.id, "name", w.options.Name, "since_open", time.Since(openTime))
 }
-
-// Window Callable Methods
 
 func (w *Window) Focus() {
 	windowPresent(w.pointer)
@@ -525,10 +645,9 @@ func windowExecJS(webview webviewPtr, js string) {
 		js,
 		len(js),
 		0,
-		"",
 		0,
 		0,
-		0)
+		0, 0)
 }
 
 func windowDestroy(window windowPtr) {
@@ -683,9 +802,9 @@ func windowSetFrameless(window windowPtr, frameless bool) {
 }
 
 // TODO: confirm this is working properly
-func windowSetHTML(webview webviewPtr, html string) {
-	lib.webkit.WebViewLoadAlternateHtml(webview, html, URLScheme+"://", nil)
-}
+//func windowSetHTML(webview webviewPtr, html string) {
+//	lib.webkit.WebViewLoadAlternateHtml(webview, html, uriScheme+"://", nil)
+//}
 
 func windowSetKeepAbove(window windowPtr, alwaysOnTop bool) {
 	lib.gtk.WindowSetKeepAbove(window, alwaysOnTop)
@@ -737,8 +856,8 @@ func windowSetupSignalHandlers(windowId uint, window windowPtr, webview webviewP
 			windowCount := len(globalApplication.windows)
 			globalApplication.windowsLock.Unlock()
 
-			if windowCount == 0 && !globalApplication.options.HideOnLastWindowClosed {
-				globalApplication.log("last pointer closed, quitting")
+			if windowCount == 0 && !globalApplication.options.Hold {
+				globalApplication.log("last window closed, quitting")
 				globalApplication.Quit()
 			}
 		} else {
@@ -763,7 +882,7 @@ func windowSetupSignalHandlers(windowId uint, window windowPtr, webview webviewP
 			for name, constant := range w.constants {
 				w.ExecJS(fmt.Sprintf("const %s = JSON.parse('%s');", name, constant))
 			}
-
+			// TODO: this is not working properly
 			w.ExecJS(apiClient(w.bindings))
 
 			for _, css := range w.options.CSS {
@@ -848,13 +967,17 @@ func (w *Window) SetURL(uri string) {
 		url, err := url.Parse(uri)
 		if err == nil && url.Scheme == "" && url.Host == "" {
 			// TODO handle this in a central location, the scheme and host might be platform dependant.
-			url.Scheme = URLScheme
-			url.Host = URLScheme // TODO: maybe handle differently
-			//url.Host = ""
+			url.Scheme = uriScheme
+			//	url.Host = uriScheme // TODO: maybe handle differently
+			//url.Host = "src"
 			uri = url.String()
 		}
 	}
 	windowSetURL(w.webview, uri)
+}
+
+func (w *Window) SetHTML(html string) {
+	lib.webkit.WebViewLoadHtml(w.webview, html, uriScheme+"://")
 }
 
 func (w *Window) SetMinMaxSize(minWidth, minHeight, maxWidth, maxHeight int) {
@@ -972,9 +1095,9 @@ func (w *Window) setEnabled(enabled bool) {
 	widgetSetSensitive(ptr(w.pointer), enabled)
 }
 
-func (w *Window) setHTML(html string) {
-	windowSetHTML(w.webview, html)
-}
+//func (w *Window) setHTML(html string) {
+//	windowSetHTML(w.webview, html)
+//}
 
 func (w *Window) startResize(border string) error {
 	// FIXME: what do we need to do here?

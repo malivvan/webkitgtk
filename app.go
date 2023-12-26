@@ -28,6 +28,9 @@ type App struct {
 	windowsLock sync.RWMutex
 
 	runOnce runOnce
+
+	//web context
+	context ptr
 }
 
 func New(options AppOptions) *App {
@@ -41,11 +44,6 @@ func New(options AppOptions) *App {
 	} else {
 		options.Name = strings.ToLower(options.Name)
 	}
-	if options.PanicHandler == nil {
-		options.PanicHandler = func(v any) {
-			panic(v)
-		}
-	}
 
 	// Create app
 	app := &App{
@@ -57,20 +55,17 @@ func New(options AppOptions) *App {
 
 	// Setup debug logger
 	if options.Debug {
-		logger := &logger{
+		app.logger = &logger{
 			prefix: "webkit2gtk: " + options.Name,
-			writer: os.Stdout,
+			writer: LogWriter,
 		}
-		if options.LogWriter != nil {
-			logger.writer = options.LogWriter
-		}
-		app.logger = logger
 	}
 
+	/////////////////////////////////////
 	globalApplication = app // !important
-
 	return app
 }
+
 func (a *App) CurrentWindow() *Window {
 	if a.pointer == 0 {
 		return nil
@@ -103,56 +98,20 @@ func (a *App) Run() error {
 	if err := os.Setenv("JSC_SIGNAL_FOR_GC", "20"); err != nil {
 		return err
 	}
-	//
-	//// 2. Connect foreground signal (USR2)
-	//// TODO: Is this working?
-	//foreground := make(chan os.Signal, 1)
-	//signal.Notify(foreground, syscall.SIGUSR2)
-	//go func() {
-	//	for {
-	//		<-foreground
-	//		for _, window := range a.windows {
-	//			windowPresent(window.pointer)
-	//
-	//		}
-	//		a.info("application foregrounded", "main_thread", mainThreadId)
-	//	}
-	//}()
 
-	// 3. Load shared libraries
+	// 2. Load shared libraries
 	if err := a.loadSharedLibs(); err != nil {
 		return err
 	}
 
-	// 4. Get Main Thread and create GTK Application
+	// 3. Get Main Thread and create GTK Application
 	mainThreadId = lib.g.ThreadSelf()
 	a.pointer = lib.gtk.ApplicationNew(a.ident, uint(0))
 
-	//dbusCli, err := newDBUSClient(a.ident)
-	//if err != nil {
-	//	return err
-	//}
-	//running, pid := dbusCli.IsAppRunning()
-	//if running {
-	//	// send signal
-	//	proc, err := os.FindProcess(int(pid))
-	//	if err != nil {
-	//		return err
-	//	}
-	//	err = proc.Signal(syscall.SIGUSR2)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	a.info("application already running", "pid", pid)
-	//	return fmt.Errorf("application already running")
-	//}
-
-	//lib.g.ApplicationRegister(a.pointer, 0, 0)
-
-	// 3. Run deferred functions
+	// 4. Run deferred functions
 	a.runOnce.invoke(true)
 
-	// 4. Setup activate signal ipc
+	// 5. Setup activate signal ipc
 	app := ptr(a.pointer)
 	activate := func() {
 		a.log("application startup complete", "since_startup", time.Since(startupTime))

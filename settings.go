@@ -1,15 +1,37 @@
 package webkitgtk
 
 import (
-	"io"
+	"net/http"
 )
 
 type AppOptions struct {
-	Name                   string
-	Debug                  bool
-	LogWriter              io.Writer
-	HideOnLastWindowClosed bool
-	PanicHandler           func(any)
+
+	// The name of the app.
+	Name string
+
+	// Debug mode.
+	Debug bool
+
+	// Hold the app open after the last window is closed.
+	Hold bool
+
+	// Handle internal app:// requests.
+	Handle map[string]http.Handler
+
+	// Ephemeral mode disables all persistent storage.
+	Ephemeral bool
+
+	// DataDir is the directory where persistent data is stored.
+	DataDir string
+
+	// CacheDir is the directory where persistent cache is stored.
+	CacheDir string
+
+	// CacheModel is the cache model used by the webview.
+	CacheModel WebkitCacheModel
+
+	// CookiePolicy is the cookie store used by the webview.
+	CookiePolicy WebkitCookiePolicy
 }
 
 type WebkitSettings struct {
@@ -189,8 +211,8 @@ var defaultWebkitSettings = WebkitSettings{
 	EnableMediaSource:                         true,
 	EnableEncryptedMedia:                      false,
 	EnableMediaCapabilities:                   false,
-	AllowFileAccessFromFileUrls:               true,
-	AllowUniversalAccessFromFileUrls:          true,
+	AllowFileAccessFromFileUrls:               false,
+	AllowUniversalAccessFromFileUrls:          false,
 	AllowTopNavigationToDataUrls:              false,
 	HardwareAccelerationPolicy:                1,
 	EnableBackForwardNavigationGestures:       false,

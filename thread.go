@@ -37,63 +37,8 @@ func invokeSync(fn func()) {
 	wg.Wait()
 }
 
-func invokeSyncWithResult[T any](fn func() T) (res T) {
-	var wg sync.WaitGroup
-	wg.Add(1)
-	globalApplication.dispatchOnMainThread(func() {
-		defer processPanicHandlerRecover()
-		res = fn()
-		wg.Done()
-	})
-	wg.Wait()
-	return res
-}
-
-func invokeSyncWithError(fn func() error) (err error) {
-	var wg sync.WaitGroup
-	wg.Add(1)
-	globalApplication.dispatchOnMainThread(func() {
-		defer processPanicHandlerRecover()
-		err = fn()
-		wg.Done()
-	})
-	wg.Wait()
-	return
-}
-
-func invokeSyncWithResultAndError[T any](fn func() (T, error)) (res T, err error) {
-	var wg sync.WaitGroup
-	wg.Add(1)
-	globalApplication.dispatchOnMainThread(func() {
-		defer processPanicHandlerRecover()
-		res, err = fn()
-		wg.Done()
-	})
-	wg.Wait()
-	return res, err
-}
-
-func invokeSyncWithResultAndOther[T any, U any](fn func() (T, U)) (res T, other U) {
-	var wg sync.WaitGroup
-	wg.Add(1)
-	globalApplication.dispatchOnMainThread(func() {
-		defer processPanicHandlerRecover()
-		res, other = fn()
-		wg.Done()
-	})
-	wg.Wait()
-	return res, other
-}
-
-func invokeAsync(fn func()) {
-	globalApplication.dispatchOnMainThread(func() {
-		defer processPanicHandlerRecover()
-		fn()
-	})
-}
-
 func processPanicHandlerRecover() {
-	h := globalApplication.options.PanicHandler
+	h := PanicHandler
 	if h == nil {
 		return
 	}
@@ -113,11 +58,11 @@ func (a *App) dispatchOnMainThread(fn func()) {
 	id := generateFunctionStoreID()
 	mainThreadFunctionStore[id] = fn
 	mainThreadFunctionStoreLock.Unlock()
+
 	// Call platform specific dispatch function
 	dispatchOnMainThread(id)
 }
 
-// mainthread stuff
 func dispatchOnMainThread(id uint) {
 	lib.g.IdleAdd(purego.NewCallback(func(ptr) int {
 		executeOnMainThread(id)
