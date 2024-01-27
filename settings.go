@@ -1,22 +1,18 @@
 package webkitgtk
 
-import (
-	"net/http"
-)
-
 type AppOptions struct {
 
-	// The name of the app.
-	Name string
+	// ID is the unique identifier of the app in reverse domain notation. e.g. com.github.malivvan.webkitgtk
+	ID string
 
-	// Debug mode.
-	Debug bool
+	// Name is the name of the app.
+	Name string
 
 	// Hold the app open after the last window is closed.
 	Hold bool
 
-	// Handle internal app:// requests.
-	Handle map[string]http.Handler
+	// The icon of the app.
+	Icon []byte
 
 	// Ephemeral mode disables all persistent storage.
 	Ephemeral bool

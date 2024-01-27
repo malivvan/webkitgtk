@@ -116,7 +116,7 @@ type WindowOptions struct {
 	Focused bool
 
 	// If true, the window's devtools will be available
-	//DevToolsEnabled bool
+	DevToolsEnabled bool
 
 	/////////////////
 
@@ -128,11 +128,11 @@ type WindowOptions struct {
 }
 
 type Window struct {
+	log        logFunc
 	options    WindowOptions
 	pointer    windowPtr
 	id         uint
 	app        *App
-	logger     *logger
 	webview    webviewPtr
 	vbox       ptr
 	lastWidth  int
@@ -159,18 +159,7 @@ func (a *App) Open(options WindowOptions) *Window {
 		id:      getWindowID(),
 		options: options,
 	}
-
-	if a.logger != nil {
-		newWindow.logger = &logger{
-			prefix: a.logger.prefix + "-",
-			writer: a.logger.writer,
-		}
-		if options.Name != "" {
-			newWindow.logger.prefix += options.Name
-		} else {
-			newWindow.logger.prefix += strconv.Itoa(int(newWindow.id))
-		}
-	}
+	newWindow.log = newLogFunc("window-" + strconv.Itoa(int(newWindow.id)))
 
 	if options.Define != nil && len(options.Define) > 0 {
 		newWindow.constants = make(map[string]string)
@@ -194,7 +183,7 @@ func (a *App) Open(options WindowOptions) *Window {
 		}
 	}
 
-	a.runOnce.add(newWindow)
+	a.started.run(newWindow)
 	return newWindow
 }
 
@@ -203,7 +192,7 @@ func (w *Window) ID() uint {
 }
 
 func (w *Window) run() {
-	invokeSync(w.create)
+	w.app.thread.InvokeSync(w.create)
 }
 
 func (w *Window) create() {
@@ -220,45 +209,48 @@ func (w *Window) create() {
 	lib.g.ObjectRefSink(ptr(w.pointer))
 	/////////////////////////////////////////////////////////////////////
 
-	// 1. Create the web context once.
-	if w.app.context == 0 {
+	// 1. Create the web webContext once.
+	if w.app.webContext == 0 {
 
-		// 1.1. Prepare the data manager for the web context.
-		cacheDir := w.app.options.CacheDir
+		// 1.1. Prepare the data manager for the web webContext.
+		cacheDir := w.app.cacheDir
 		if cacheDir == "" {
-			cacheDir = filepath.Join(lib.g.GetHomeDir(), ".cache", "webkitgtk", w.app.options.Name)
+			cacheDir = filepath.Join(lib.g.GetHomeDir(), ".cache", "webkitgtk", w.app.name)
 		}
-		dataDir := w.app.options.DataDir
+		dataDir := w.app.dataDir
 		if dataDir == "" {
-			dataDir = filepath.Join(lib.g.GetHomeDir(), ".local", "share", "webkitgtk", w.app.options.Name)
+			dataDir = filepath.Join(lib.g.GetHomeDir(), ".local", "share", "webkitgtk", w.app.name)
 		}
-		if w.app.options.Ephemeral {
+		if w.app.ephemeral {
 			cacheDir = ""
 			dataDir = ""
 		}
 		dataManager := lib.webkit.WebsiteDataManagerNew(
 			"base-cache-directory", cacheDir,
 			"base-data-directory", dataDir,
-			"is-ephemeral", w.app.options.Ephemeral, 0)
-		w.app.context = lib.webkit.WebContextNewWithWebsiteDataManager(dataManager)
+			"is-ephemeral", w.app.ephemeral, 0)
+
+		w.app.webContext = lib.webkit.WebContextNewWithWebsiteDataManager(dataManager)
+		lib.webkit.WebContextSetCacheModel(w.app.webContext, int(w.app.cacheModel))
 
 		// 1.2. Configure additional data manager settings if not ephemeral.
-		if !w.app.options.Ephemeral {
+		if !w.app.ephemeral {
 			lib.webkit.WebsiteDataManagerSetPersistentCredentialStorageEnabled(dataManager, true)
 
-			cookieManager := lib.webkit.WebContextGetCookieManager(w.app.context)
+			cookieManager := lib.webkit.WebContextGetCookieManager(w.app.webContext)
 			lib.webkit.CookieManagerSetPersistentStorage(cookieManager, filepath.Join(dataDir, "cookies.db"), 1)
+			lib.webkit.CookieManagerSetAcceptPolicy(cookieManager, int(w.app.cookiePolicy))
 
-			lib.webkit.WebContextSetFaviconDatabaseDirectory(w.app.context, filepath.Join(dataDir, "favicons"))
-			lib.webkit.WebContextSetWebExtensionsDirectory(w.app.context, filepath.Join(dataDir, "extensions"))
+			lib.webkit.WebContextSetFaviconDatabaseDirectory(w.app.webContext, filepath.Join(dataDir, "favicons"))
+			lib.webkit.WebContextSetWebExtensionsDirectory(w.app.webContext, filepath.Join(dataDir, "extensions"))
 		}
 
-		// 1.3. Configure app URI scheme and register it with the web context.
-		securityManager := lib.webkit.WebContextGetSecurityManager(w.app.context)
+		// 1.3. Configure app URI scheme and register it with the web webContext.
+		securityManager := lib.webkit.WebContextGetSecurityManager(w.app.webContext)
 		lib.webkit.SecurityManagerRegisterUriSchemeAsCorsEnabled(securityManager, uriScheme)
 		lib.webkit.SecurityManagerRegisterUriSchemeAsSecure(securityManager, uriScheme)
 		lib.webkit.WebContextRegisterUriScheme(
-			w.app.context,
+			w.app.webContext,
 			uriScheme,
 			ptr(purego.NewCallback(func(request ptr) {
 				r := newUriSchemeRequest(request)
@@ -273,12 +265,16 @@ func (w *Window) create() {
 				rw := r.toResponseWriter()
 				defer rw.Close()
 
-				if handler, exists := w.app.options.Handle[req.URL.Host]; exists {
+				w.app.handlerLock.RLock()
+				handler, exists := w.app.handler[req.URL.Host]
+				w.app.handlerLock.RUnlock()
+				if exists {
+					w.log("handler request", "host", req.URL.Host, "path", req.URL.Path)
 					handler.ServeHTTP(rw, req)
 					return
 				}
 
-				w.log("no handler found for request", "host", req.URL.Host)
+				w.log("no handler found for request", "host", req.URL.Host, "path", req.URL.Path)
 				http.Error(rw, "no handler found for request", http.StatusNotFound)
 			})),
 			0,
@@ -286,8 +282,8 @@ func (w *Window) create() {
 		)
 	}
 
-	// 2. Create the webview add app URI scheme to the CORS allow list.
-	w.webview = lib.webkit.WebViewNewWithContext(w.app.context)
+	// 2. Create the webview run app URI scheme to the CORS allow list.
+	w.webview = lib.webkit.WebViewNewWithContext(w.app.webContext)
 	uriSchemeEntry := lib.g.RefStringNew(uriScheme + "://*/*")
 	defer lib.g.RefStringRelease(uriSchemeEntry)
 	lib.webkit.WebViewSetCorsAllowlist(w.webview, uriSchemeEntry, 0)
@@ -433,7 +429,11 @@ func (w *Window) create() {
 			w.options.MaxHeight,
 		)
 	}
-	w.SetTitle(w.options.Title)
+
+	if w.options.Title != "" {
+		w.SetTitle(w.options.Title)
+	}
+
 	w.SetSize(w.options.Width, w.options.Height)
 	w.SetZoom(w.options.Zoom)
 	w.SetOverlay(w.options.Overlay)
@@ -479,7 +479,7 @@ func (w *Window) create() {
 			w.Center() // needs to be queued until after GTK starts up!
 		}
 	}
-	if w.app.options.Debug {
+	if w.options.DevToolsEnabled {
 		w.ToggleDevTools()
 	}
 
@@ -843,22 +843,22 @@ func windowSetURL(webview webviewPtr, uri string) {
 func windowSetupSignalHandlers(windowId uint, window windowPtr, webview webviewPtr) {
 	handleDelete := purego.NewCallback(func(ptr) {
 
-		globalApplication.windowsLock.RLock()
-		appWindow := globalApplication.windows[windowId]
-		globalApplication.windowsLock.RUnlock()
+		_app.windowsLock.RLock()
+		appWindow := _app.windows[windowId]
+		_app.windowsLock.RUnlock()
 
 		if !appWindow.options.HideOnClose {
 			windowDestroy(window)
 			appWindow.log("pointer closed", "id", windowId, "name", appWindow.options.Name)
 
-			globalApplication.windowsLock.Lock()
-			delete(globalApplication.windows, windowId)
-			windowCount := len(globalApplication.windows)
-			globalApplication.windowsLock.Unlock()
+			_app.windowsLock.Lock()
+			delete(_app.windows, windowId)
+			windowCount := len(_app.windows)
+			_app.windowsLock.Unlock()
 
-			if windowCount == 0 && !globalApplication.options.Hold {
-				globalApplication.log("last window closed, quitting")
-				globalApplication.Quit()
+			if windowCount == 0 && !_app.hold {
+				_app.log("last window closed, quitting")
+				_app.Quit()
 			}
 		} else {
 			appWindow.log("pointer hiding", "id", windowId, "name", appWindow.options.Name)
@@ -873,9 +873,9 @@ func windowSetupSignalHandlers(windowId uint, window windowPtr, webview webviewP
 		case 1: // LOAD_REDIRECTED
 		case 2: // LOAD_COMMITTED
 		case 3: // LOAD_FINISHED
-			globalApplication.windowsLock.RLock()
-			w := globalApplication.windows[windowId]
-			globalApplication.windowsLock.RUnlock()
+			_app.windowsLock.RLock()
+			w := _app.windows[windowId]
+			_app.windowsLock.RUnlock()
 
 			w.log("initial load finished", "id", windowId, "name", w.options.Name)
 
@@ -1102,11 +1102,4 @@ func (w *Window) setEnabled(enabled bool) {
 func (w *Window) startResize(border string) error {
 	// FIXME: what do we need to do here?
 	return nil
-}
-
-func (w *Window) log(msg interface{}, kv ...interface{}) {
-	if w.logger == nil {
-		return
-	}
-	w.logger.log(msg, kv...)
 }

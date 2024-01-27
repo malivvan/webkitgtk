@@ -45,6 +45,10 @@ type (
 	}
 )
 
+var (
+	nilRadioGroup gsListPtr = nil
+)
+
 type gError struct {
 	domain  uint32
 	code    int
@@ -91,6 +95,7 @@ var lib struct {
 		ApplicationRegister    func(ptr, ptr, ptr)
 		ApplicationActivate    func(ptr)
 		GetApplicationName     func() string
+		ApplicationIdIsValid   func(string) bool
 		ApplicationRelease     func(ptr)
 		ApplicationRun         func(ptr, int, []string) int
 		BytesNewStatic         func(uintptr, int) uintptr
@@ -149,19 +154,19 @@ var lib struct {
 		ContainerAdd                 func(windowPtr, ptr)
 		CssProviderLoadFromData      func(ptr, string, int, ptr)
 		CssProviderNew               func() ptr
-		DialogAddButton              func(ptr, string, int)
-		DialogGetContentArea         func(ptr) ptr
-		DialogRun                    func(ptr) int
-		DialogSetDefaultResponse     func(ptr, int)
+		DialogAddButton              func(windowPtr, string, int)
+		DialogGetContentArea         func(windowPtr) windowPtr
+		DialogRun                    func(windowPtr) int
+		DialogSetDefaultResponse     func(windowPtr, int)
 		DragDestSet                  func(webviewPtr, uint, ptr, uint, uint)
-		FileChooserAddFilter         func(ptr, ptr)
-		FileChooserDialogNew         func(string, ptr, int, string, int, string, int, ptr) ptr
-		FileChooserGetFilenames      func(ptr) *gsList
-		FileChooserSetAction         func(ptr, int)
-		FileChooserSetCreateFolders  func(ptr, bool)
-		FileChooserSetCurrentFolder  func(ptr, string)
-		FileChooserSetSelectMultiple func(ptr, bool)
-		FileChooserSetShowHidden     func(ptr, bool)
+		FileChooserAddFilter         func(windowPtr, ptr)
+		FileChooserDialogNew         func(string, windowPtr, int, string, int, string, int, ptr) windowPtr
+		FileChooserGetFilenames      func(windowPtr) *gsList
+		FileChooserSetAction         func(windowPtr, int)
+		FileChooserSetCreateFolders  func(windowPtr, bool)
+		FileChooserSetCurrentFolder  func(windowPtr, string)
+		FileChooserSetSelectMultiple func(windowPtr, bool)
+		FileChooserSetShowHidden     func(windowPtr, bool)
 		FileFilterAddPattern         func(ptr, string)
 		FileFilterNew                func() ptr
 		FileFilterSetName            func(ptr, string)
@@ -172,32 +177,32 @@ var lib struct {
 		MenuItemSetSubmenu           func(ptr, ptr)
 		MenuNew                      func() ptr
 		MenuShellAppend              func(ptr, ptr)
-		MessageDialogNew             func(ptr, int, int, int, string) ptr
-		//RadioMenuItemGetGroup        func(ptr) gsListPtr
-		//RadioMenuItemNewWithLabel    func(gsListPtr, string) ptr
-		SeparatorMenuItemNew    func() ptr
-		StyleContextAddProvider func(ptr, ptr, int)
-		TargetEntryFree         func(ptr)
-		TargetEntryNew          func(string, int, uint) ptr
-		WidgetDestroy           func(windowPtr)
-		WidgetGetDisplay        func(windowPtr) ptr
-		WidgetGetScreen         func(windowPtr) ptr
-		WidgetGetStyleContext   func(windowPtr) ptr
-		WidgetGetWindow         func(windowPtr) windowPtr
-		WidgetHide              func(ptr)
-		WidgetIsVisible         func(ptr) bool
-		WidgetShow              func(ptr)
-		WidgetShowAll           func(windowPtr)
-		WidgetSetAppPaintable   func(windowPtr, int)
-		WidgetSetName           func(ptr, string)
-		WidgetSetSensitive      func(ptr, int)
-		WidgetSetTooltipText    func(windowPtr, string)
-		WidgetSetVisual         func(windowPtr, ptr)
-		WindowClose             func(windowPtr)
-		WindowFullscreen        func(windowPtr)
-		WindowGetPosition       func(windowPtr, *int, *int) bool
-		WindowGetSize           func(windowPtr, *int, *int)
-		WindowHasToplevelFocus  func(windowPtr) int
+		MessageDialogNew             func(windowPtr, int, int, int, string) windowPtr
+		RadioMenuItemGetGroup        func(ptr) gsListPtr
+		RadioMenuItemNewWithLabel    func(gsListPtr, string) ptr
+		SeparatorMenuItemNew         func() ptr
+		StyleContextAddProvider      func(ptr, ptr, int)
+		TargetEntryFree              func(ptr)
+		TargetEntryNew               func(string, int, uint) ptr
+		WidgetDestroy                func(windowPtr)
+		WidgetGetDisplay             func(windowPtr) ptr
+		WidgetGetScreen              func(windowPtr) ptr
+		WidgetGetStyleContext        func(windowPtr) ptr
+		WidgetGetWindow              func(windowPtr) windowPtr
+		WidgetHide                   func(ptr)
+		WidgetIsVisible              func(ptr) bool
+		WidgetShow                   func(ptr)
+		WidgetShowAll                func(windowPtr)
+		WidgetSetAppPaintable        func(windowPtr, int)
+		WidgetSetName                func(ptr, string)
+		WidgetSetSensitive           func(ptr, int)
+		WidgetSetTooltipText         func(windowPtr, string)
+		WidgetSetVisual              func(windowPtr, ptr)
+		WindowClose                  func(windowPtr)
+		WindowFullscreen             func(windowPtr)
+		WindowGetPosition            func(windowPtr, *int, *int) bool
+		WindowGetSize                func(windowPtr, *int, *int)
+		WindowHasToplevelFocus       func(windowPtr) int
 		//WindowKeepAbove              func(pointer, bool)
 		WindowMaximize         func(windowPtr)
 		WindowIconify          func(windowPtr)
@@ -382,6 +387,7 @@ var lib struct {
 
 		WebContextGetWebsiteDataManager   func(ptr) ptr
 		CookieManagerSetPersistentStorage func(ptr, string, int)
+		CookieManagerSetAcceptPolicy      func(ptr, int)
 		WebContextGetCookieManager        func(ptr) ptr
 		WebViewGetUserContentManager      func(webviewPtr) userContentManagerPtr
 
@@ -392,6 +398,7 @@ var lib struct {
 		WebsiteDataManagerGetLocalStorageDirectory              func(ptr) string
 		WebsiteDataManagerSetPersistentCredentialStorageEnabled func(ptr, bool)
 		WebContextNewWithWebsiteDataManager                     func(ptr) ptr
+		WebContextSetCacheModel                                 func(ptr, int)
 		WebContextGetSandboxEnabled                             func(ptr) bool
 		WebContextSetSandboxEnabled                             func(ptr, bool)
 		WebContextAddPathToSandbox                              func(ptr, string)

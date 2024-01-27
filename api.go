@@ -90,14 +90,16 @@ func apiHandler(bindings map[string]apiBinding, eval func(string), log func(inte
 			eval("webkitAPI.reject(" + string(id) + ",'api not found')")
 			return
 		}
-		reply, err := binding.call(fn, req[cur:])
-		if err != nil {
-			log("api reject", "id", id, "error", err)
-			eval("webkitAPI.reject(" + string(id) + ",'" + err.Error() + "')")
-			return
-		}
-		log("api resolve", "id", id, "reply", reply)
-		eval("webkitAPI.resolve(" + id + ",'" + reply + "')")
+		go func() {
+			reply, err := binding.call(fn, req[cur:])
+			if err != nil {
+				log("api reject", "id", id, "error", err)
+				eval("webkitAPI.reject(" + string(id) + ",'" + err.Error() + "')")
+				return
+			}
+			log("api resolve", "id", id, "reply", reply)
+			eval("webkitAPI.resolve(" + id + ",'" + reply + "')")
+		}()
 	}
 }
 
@@ -117,7 +119,6 @@ func apiBind(api interface{}) (apiBinding, error) {
 		if _, exists := binding[fn]; exists {
 			return nil, fmt.Errorf("function %s already exists", fn)
 		}
-		println(fn)
 
 		var hasInput, hasOutput bool
 		var inputType reflect.Type

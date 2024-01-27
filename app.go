@@ -3,66 +3,110 @@ package webkitgtk
 import (
 	"fmt"
 	"github.com/ebitengine/purego"
+	"net/http"
 	"os"
 	"runtime"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 )
 
-var globalApplication *App
-
 func init() {
 	runtime.LockOSThread()
 }
 
+var _app *App
+
 type App struct {
-	options AppOptions
-	pointer ptr
-	pid     int
-	ident   string
-	logger  *logger
+	log logFunc
 
-	windows     map[uint]*Window
-	windowsLock sync.RWMutex
+	id   string // application id e.g. com.github.malivvan.webkitgtk.undefined
+	pid  int    // process id of the application
+	name string // application name e.g. Unnamed Application
+	icon []byte // application icon used to create desktop file
 
-	runOnce runOnce
+	thread  *mainThread // thread is the mainthread runner
+	pointer ptr         // gtk application pointer
 
-	//web context
-	context ptr
+	trayIcon []byte    // trayIcon is the system tray icon (if not set icon will be used)
+	trayMenu *TrayMenu // trayMenu is the system tray menu
+
+	systray  *dbusSystray // systray is the dbus systray
+	notifier *dbusNotify  // notifier is the dbus notifier
+	session  *dbusSession // session is the dbus session
+
+	windows     map[uint]*Window // windows is the map of all windows
+	windowsLock sync.RWMutex     // windowsLock is the lock for windows map
+
+	dialogs     map[uint]interface{} // dialogs is the map of all dialogs
+	dialogsLock sync.RWMutex         // dialogsLock is the lock for dialogs map
+
+	handler     map[string]http.Handler // handler is the map of all http handlers
+	handlerLock sync.RWMutex            // handlerLock is the lock for handler map
+
+	webContext   ptr                // webContext is the global webkit web context
+	hold         bool               // hold indicates if the application stays alive after the last window is closed
+	ephemeral    bool               // ephemeral is the flag to indicate if the application is ephemeral
+	dataDir      string             // dataDir is the directory where the application data is stored
+	cacheDir     string             // cacheDir is the directory where the application cache is stored
+	cookiePolicy WebkitCookiePolicy // cookiePolicy is the cookie policy for the application
+	cacheModel   WebkitCacheModel   // cacheModel is the cache model for the application
+
+	started deferredRunner // started is the deferred runner for post application startup
+}
+
+func (a *App) Menu(icon []byte) *TrayMenu {
+	a.trayIcon = icon
+	if a.trayMenu == nil {
+		a.trayMenu = &TrayMenu{}
+	}
+	return a.trayMenu
+}
+
+func (a *App) Handle(host string, handler http.Handler) {
+	a.handlerLock.Lock()
+	a.handler[host] = handler
+	a.handlerLock.Unlock()
 }
 
 func New(options AppOptions) *App {
-	if globalApplication != nil {
-		return globalApplication
+	if _app != nil {
+		return _app
 	} ///////////////////////////
 
 	// Apply defaults
+	if options.ID == "" {
+		options.ID = "com.github.malivvan.webkitgtk.undefined"
+	}
 	if options.Name == "" {
-		options.Name = "undefined"
-	} else {
-		options.Name = strings.ToLower(options.Name)
+		options.Name = "Unnamed Application"
+	}
+	if options.Icon == nil {
+		options.Icon = defaultIcon
 	}
 
 	// Create app
 	app := &App{
-		options: options,
-		pid:     syscall.Getpid(),
-		ident:   fmt.Sprintf("org.webkit2gtk.%s", strings.Replace(options.Name, " ", "-", -1)),
-		windows: make(map[uint]*Window),
-	}
+		log:  newLogFunc("app"),
+		pid:  syscall.Getpid(),
+		id:   options.ID,
+		name: options.Name,
+		icon: options.Icon,
 
-	// Setup debug logger
-	if options.Debug {
-		app.logger = &logger{
-			prefix: "webkit2gtk: " + options.Name,
-			writer: LogWriter,
-		}
+		windows: make(map[uint]*Window),
+		dialogs: make(map[uint]interface{}),
+		handler: make(map[string]http.Handler),
+
+		hold:         options.Hold,
+		ephemeral:    options.Ephemeral,
+		dataDir:      options.DataDir,
+		cacheDir:     options.CacheDir,
+		cookiePolicy: options.CookiePolicy,
+		cacheModel:   options.CacheModel,
 	}
 
 	/////////////////////////////////////
-	globalApplication = app // !important
+	_app = app // !important
 	return app
 }
 
@@ -85,77 +129,95 @@ func (a *App) CurrentWindow() *Window {
 	return nil
 }
 
-func (a *App) Quit() {
-	appDestroy(a.pointer)
-}
+func (a *App) Run() (err error) {
+	defer panicHandlerRecover()
 
-func (a *App) Run() error {
-	defer processPanicHandlerRecover()
+	// >>> STARTUP
 	startupTime := time.Now()
-	a.log("application startup...", "identifier", a.ident, "main_thread", mainThreadId, "pid", a.pid)
+	a.log("application startup...", "identifier", a.id, "pid", a.pid)
 
 	// 1. Fix console spam (USR1)
 	if err := os.Setenv("JSC_SIGNAL_FOR_GC", "20"); err != nil {
-		return err
+		return fmt.Errorf("failed to set JSC_SIGNAL_FOR_GC: %w", err)
 	}
 
 	// 2. Load shared libraries
 	if err := a.loadSharedLibs(); err != nil {
-		return err
+		return fmt.Errorf("failed to load shared libraries: %w", err)
 	}
 
-	// 3. Get Main Thread and create GTK Application
-	mainThreadId = lib.g.ThreadSelf()
-	a.pointer = lib.gtk.ApplicationNew(a.ident, uint(0))
+	// 3. Validate application identifier
+	if !lib.g.ApplicationIdIsValid(a.id) {
+		return fmt.Errorf("invalid application identifier: %s", a.id)
+	}
 
-	// 4. Run deferred functions
-	a.runOnce.invoke(true)
+	// 4. Get Main Thread and create GTK Application
+	a.thread = newMainThread()
+	a.pointer = lib.gtk.ApplicationNew(a.id, uint(0))
+	a.log("application created", "pointer", a.pointer, "thread", a.thread.ID())
+
+	// 5. Establish DBUS session
+	var dbusPlugins []dbusPlugin
+	if a.trayMenu != nil {
+		a.systray = a.trayMenu.toTray(a.id, a.trayIcon)
+		dbusPlugins = append(dbusPlugins, a.systray)
+	}
+	a.notifier = &dbusNotify{
+		appName: a.id,
+	}
+	dbusPlugins = append(dbusPlugins, a.notifier)
+	a.session, err = newDBusSession(dbusPlugins)
+	if err != nil {
+		return fmt.Errorf("failed to create dbus session: %w", err)
+	}
 
 	// 5. Setup activate signal ipc
-	app := ptr(a.pointer)
-	activate := func() {
-		a.log("application startup complete", "since_startup", time.Since(startupTime))
-		lib.g.ApplicationHold(app) // allow running without a pointer
-	}
 	lib.g.SignalConnectData(
-		ptr(a.pointer),
+		a.pointer,
 		"activate",
-		purego.NewCallback(activate),
-		app,
+		purego.NewCallback(func() {
+
+			// 7. Allow running without a window
+			lib.g.ApplicationHold(a.pointer)
+
+			// 8. Invoke deferred runners
+			a.started.invoke()
+
+			// <<< STARTUP
+			a.log("application startup complete", "since_startup", time.Since(startupTime))
+		}),
+		a.pointer,
 		false,
 		0)
 
-	// 5. Run GTK Application
-	status := lib.g.ApplicationRun(a.pointer, 0, nil)
-	/////////////////////////////////////////////////
+	// 6. Run GTK Application
+	status := lib.g.ApplicationRun(a.pointer, 0, nil) // BLOCKING
 
-	// 6. Shutdown
+	// >>> SHUTDOWN
 	shutdownTime := time.Now()
 	a.log("application shutdown...", "status", status)
+
+	// 1. Close dbus session
+	a.session.close()
+
+	// 2. Release GTK Application and dereference application pointer
 	lib.g.ApplicationRelease(a.pointer)
-	lib.g.ObjectUnref(ptr(a.pointer))
-	var err error
-	if status != 0 {
+	lib.g.ObjectUnref(a.pointer)
+
+	// 3. Handle exit status
+	if status == 0 {
+		err = nil
+	} else {
 		err = fmt.Errorf("exit code: %d", status)
 	}
-	a.log("application shutdown done", "since_shutdown", time.Since(shutdownTime))
+
+	// <<< SHUTDOWN
+	a.log("application shutdown done", "error", err, "since_shutdown", time.Since(shutdownTime))
 	return err
 }
 
-func appDestroy(application ptr) {
-	lib.g.ApplicationQuit(application)
-}
-
-func (a *App) log(msg interface{}, kv ...interface{}) {
-	if a.logger == nil {
-		return
-	}
-	a.logger.log(msg, kv...)
-}
-
-func fatal(message string, args ...interface{}) {
-	println("*********************** FATAL ***********************")
-	println(fmt.Sprintf(message, args...))
-	println("*********************** FATAL ***********************")
-	os.Exit(1)
+func (a *App) Quit() {
+	a.thread.InvokeSync(func() {
+		lib.g.ApplicationQuit(a.pointer)
+	})
 }

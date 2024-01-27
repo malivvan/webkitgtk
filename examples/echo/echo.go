@@ -12,11 +12,11 @@ func (a *API) Echo(msg string) (string, error) {
 
 func main() {
 	app := ui.New(ui.AppOptions{
-		Name:  "echo",
-		Debug: true,
+		ID:   "com.github.malivvan.webkitgtk.examples.api",
+		Name: "WebKitGTK API Example",
 	})
 	app.Open(ui.WindowOptions{
-		Title:  "echo",
+		Title:  "api",
 		Width:  420,
 		Height: 44,
 		HTML: `<doctype html>
@@ -37,8 +37,7 @@ func main() {
 			</body>
 		</html>`,
 		Define: map[string]interface{}{
-			"appID": "echo",
-			"api":   &API{},
+			"api": &API{},
 		},
 	})
 	if err := app.Run(); err != nil {

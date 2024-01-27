@@ -14,16 +14,14 @@ var assets embed.FS
 func main() {
 	assets, _ := fs.Sub(assets, "assets")
 	app := ui.New(ui.AppOptions{
-		Name:  "sudoku",
-		Debug: true,
-		Handle: map[string]http.Handler{
-			"main": http.FileServer(http.FS(assets)),
-		},
+		ID:   "com.github.malivvan.webkitgtk.examples.handle",
+		Name: "WebKitGTK Handle Example",
 	})
+	app.Handle("main", http.FileServer(http.FS(assets)))
 	app.Open(ui.WindowOptions{
-		Title:  "Sudoku",
-		Width:  600,
-		Height: 460,
+		Title:  "Handle Example",
+		Width:  200,
+		Height: 40,
 		URL:    "app://main/",
 	})
 	if err := app.Run(); err != nil {

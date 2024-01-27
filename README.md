@@ -8,7 +8,7 @@ Pure Go WebKitGTK binding for **Linux** and **FreeBSD**.
 
 ```sh
 # go 1.21.5+
-go get github.com/malivvan/webkitgtk
+go get github.com/malivvan/webkitgtk@latest
 ```
 
 ## Example
@@ -43,9 +43,24 @@ func main() {
 	}
 }
 ```
-## Running and building
+## Running / Building
 
-Running / building the application is the same as for any other Go program, aka. just `go run` and `go build`.
+Running / building defaults to debug mode outputting logs to stderr. To build in release mode use the `release` build tag.
+
+```sh
+go build -tags release -ldflags "-s -w" -trimpath
+```
+
+The resulting release binary will be about ~6MB in size and cam be compressed further with [UPX](https://upx.github.io/) to about ~2.5MB.
+
+
+## Examples
+
+- [echo](examples/echo/echo.go) - call go functions from javascript 
+- [dialog](examples/dialog/dialog.go) - application spawning different types of dialog windows
+- [handle](examples/handle/handle.go) - handle requests on the app:// uri scheme to serve embedded files
+- [notify](examples/notify/notify.go) - application sending different types of notifications
+- [systray](examples/systray/systray.go) - example application showing how to use the systray
 
 ## Dependencies
 Either
