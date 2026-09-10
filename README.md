@@ -1,8 +1,10 @@
 # webkitgtk [![Go Reference](https://pkg.go.dev/badge/github.com/malivvan/webkitgtk.svg)](https://pkg.go.dev/github.com/malivvan/webkitgtk) [![Release](https://img.shields.io/github/v/release/malivvan/webkitgtk.svg?sort=semver)](https://github.com/malivvan/webkitgtk/releases/latest) [![Go Report Card](https://goreportcard.com/badge/github.com/malivvan/webkitgtk)](https://goreportcard.com/report/github.com/malivvan/webkitgtk) [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-Pure Go WebKitGTK binding for **Linux** and **FreeBSD**.
 
-> This is pre release software so expect bugs and potentially API breaking changes
-> but each release will be tagged to avoid breaking people's code.
+📦 webkitgtk is deprecated - say hello to [appkit](https://github.com/malivvan/appkit) 🎉 
+
+After a good run, webkitgtk is being replaced by appkit - a ground-up rewrite with no cgo, so you can cross-compile to Windows, macOS, Linux, FreeBSD and NetBSD from one machine with just GOOS/GOARCH. It binds the OS web engine directly (WKWebView / WebKitGTK / WebView2) behind a single *App API, with an isolated app:// origin, a Go↔JS bridge, tray, notifications, dialogs and frameless windows - no engine is bundled.
+
+Thank you to everyone who used webkitgtk! ❤️
 
 ## Installation
 
